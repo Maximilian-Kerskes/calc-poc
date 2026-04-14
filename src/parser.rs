@@ -1,4 +1,7 @@
-use crate::{expr::{BinaryOp, Expr}, lexer::Token};
+use crate::{
+    expr::{BinaryOp, Expr, UnaryOp},
+    lexer::Token,
+};
 
 #[derive(Debug)]
 pub enum ParseError {
@@ -6,6 +9,14 @@ pub enum ParseError {
         expected: Vec<&'static str>,
         found: Option<Token>,
     },
+}
+
+pub fn precedence(token: &Token) -> u8 {
+    match token {
+        Token::Plus | Token::Minus => 1,
+        Token::Star | Token::Slash => 2,
+        _ => 0,
+    }
 }
 
 pub struct Parser {
@@ -28,207 +39,205 @@ impl Parser {
         Some(token)
     }
 
-    fn expect(&mut self, token: Token) -> Result<(), ParseError> {
+    fn is_infix_op(&self, token: &Token) -> bool {
+        matches!(
+            token,
+            Token::Plus | Token::Minus | Token::Star | Token::Slash
+        )
+    }
+
+    pub fn parse_expr(&mut self, min_prec: u8) -> Result<Expr, ParseError> {
+        let mut left = self.parse_prefix()?;
+
+        while let Some(op) = self.peek() {
+            if !self.is_infix_op(&op) {
+                break;
+            }
+
+            let prec = precedence(&op);
+
+            if prec < min_prec {
+                break;
+            }
+
+            let op_token = self.advance().unwrap();
+
+            let op = match op_token {
+                Token::Plus => BinaryOp::Add,
+                Token::Minus => BinaryOp::Sub,
+                Token::Star => BinaryOp::Mul,
+                Token::Slash => BinaryOp::Div,
+                _ => unreachable!(),
+            };
+
+            let right = self.parse_expr(prec + 1)?;
+            left = Expr::Binary {
+                left: Box::new(left),
+                op,
+                right: Box::new(right),
+            }
+        }
+        Ok(left)
+    }
+
+    fn parse_prefix(&mut self) -> Result<Expr, ParseError> {
         match self.advance() {
-            Some(t) if t == token => Ok(()),
+            Some(Token::Number(n)) => Ok(Expr::Number(n)),
+            Some(Token::Minus) => {
+                let expr = self.parse_expr(100)?;
+                Ok(Expr::Unary {
+                    op: UnaryOp::Neg,
+                    right: Box::new(expr),
+                })
+            }
+            Some(Token::LParen) => {
+                let expr = self.parse_expr(0)?;
+                match self.advance() {
+                    Some(Token::RParen) => Ok(expr),
+                    found => Err(ParseError::UnexpectedToken {
+                        expected: vec![")"],
+                        found: None,
+                    }),
+                }
+            }
+
             other => Err(ParseError::UnexpectedToken {
-                expected: vec!["specific token"],
-                found: other,
+                expected: vec!["number", "(", "expression"],
+                found: None,
             }),
         }
     }
-
-    fn parse_factor(&mut self) -> Result<Expr, ParseError> {
-        match self.peek() {
-            Some(Token::Number(n)) => {
-                let expr = Expr::Number(n);
-                self.advance();
-                Ok(expr)
-            }
-
-            Some(Token::LParen) => {
-                self.advance();
-                let expr = self.parse_expr()?;
-                self.expect(Token::RParen)?;
-                Ok(expr)
-            }
-
-            other => Err(ParseError::UnexpectedToken {
-                expected: vec!["num", "("],
-                found: other,
-            })?,
-        }
-    }
-
-    fn parse_term(&mut self) -> Result<Expr, ParseError> {
-        let mut left = self.parse_factor()?;
-
-        while matches!(self.peek(), Some(Token::Star) | Some(Token::Slash)) {
-            let op = match self.advance() {
-                Some(op) => op,
-                None => Err(ParseError::UnexpectedToken {
-                    expected: vec!["specific token"],
-                    found: None,
-                })?,
-            };
-
-            let right = self.parse_factor()?;
-            left = Expr::Binary {
-                left: Box::new(left),
-                op: match op {
-                    Token::Star => BinaryOp::Mul,
-                    Token::Slash => BinaryOp::Div,
-                    _ => Err(ParseError::UnexpectedToken {
-                        expected: vec!["*", "/"],
-                        found: Some(op),
-                    })?,
-                },
-                right: Box::new(right),
-            }
-        }
-
-        Ok(left)
-    }
-
-    fn parse_expr(&mut self) -> Result<Expr, ParseError> {
-        let mut left = self.parse_term()?;
-
-        while matches!(self.peek(), Some(Token::Plus) | Some(Token::Minus)) {
-            let op = match self.advance() {
-                Some(op) => op,
-                None => Err(ParseError::UnexpectedToken {
-                    expected: vec!["specific token"],
-                    found: None,
-                })?,
-            };
-
-            let right = self.parse_term()?;
-            left = Expr::Binary {
-                left: Box::new(left),
-                op: match op {
-                    Token::Plus => BinaryOp::Add,
-                    Token::Minus => BinaryOp::Sub,
-                    _ => Err(ParseError::UnexpectedToken {
-                        expected: vec!["+", "-"],
-                        found: Some(op),
-                    })?,
-                },
-                right: Box::new(right),
-            }
-        }
-
-        Ok(left)
-    }
-
-    pub fn parse(&mut self) -> Result<Expr, ParseError> {
-        let expr = self.parse_expr()?;
-
-        if self.peek().is_some() {
-            return Err(ParseError::UnexpectedToken {
-                expected: vec!["end of input"],
-                found: self.peek(),
-            });
-        }
-        Ok(expr)
-    }
 }
 
-#[test]
-fn test_simple_addition() {
-    let ast = Parser::new(vec![Token::Number(1.0), Token::Plus, Token::Number(2.0)])
-        .parse()
-        .unwrap();
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::lexer::Token;
 
-    match ast {
-        Expr::Binary { left, op, right } => {
-            assert!(matches!(op, BinaryOp::Add));
-
-            assert!(matches!(*left, Expr::Number(1.0)));
-            assert!(matches!(*right, Expr::Number(2.0)));
-        }
-        _ => panic!("expected binary expression"),
+    fn parse(tokens: Vec<Token>) -> Expr {
+        let mut parser = Parser::new(tokens);
+        parser.parse_expr(0).unwrap()
     }
-}
 
-#[test]
-fn test_precedence_mul_before_add() {
-    let ast = Parser::new(vec![
-        Token::Number(1.0),
-        Token::Plus,
-        Token::Number(2.0),
-        Token::Star,
-        Token::Number(3.0),
-    ])
-    .parse()
-    .unwrap();
-
-    match ast {
-        Expr::Binary { op, left, right } => {
-            assert!(matches!(op, BinaryOp::Add));
-            assert!(matches!(*left, Expr::Number(1.0)));
-
-            match *right {
-                Expr::Binary { op, left, right } => {
-                    assert!(matches!(op, BinaryOp::Mul));
-                    assert!(matches!(*left, Expr::Number(2.0)));
-                    assert!(matches!(*right, Expr::Number(3.0)));
-                }
-                _ => panic!("expected multiplication on right side"),
-            }
+    #[test]
+    fn test_single_number() {
+        let expr = parse(vec![Token::Number(42.0)]);
+        match expr {
+            Expr::Number(n) => assert_eq!(n, 42.0),
+            _ => panic!("Expected number"),
         }
-        _ => panic!("expected binary expression"),
     }
-}
 
-#[test]
-fn test_parentheses_override_precedence() {
-    let ast = Parser::new(vec![
-        Token::LParen,
-        Token::Number(1.0),
-        Token::Plus,
-        Token::Number(2.0),
-        Token::RParen,
-        Token::Star,
-        Token::Number(3.0),
-    ])
-    .parse()
-    .unwrap();
+    #[test]
+    fn test_simple_addition() {
+        let expr = parse(vec![Token::Number(1.0), Token::Plus, Token::Number(2.0)]);
 
-    match ast {
-        Expr::Binary { op, left, right } => {
-            assert!(matches!(op, BinaryOp::Mul));
-
-            match *left {
-                Expr::Binary { op, left, right } => {
-                    assert!(matches!(op, BinaryOp::Add));
-                    assert!(matches!(*left, Expr::Number(1.0)));
-                    assert!(matches!(*right, Expr::Number(2.0)));
-                }
-                _ => panic!("expected addition inside parentheses"),
-            }
-
-            assert!(matches!(*right, Expr::Number(3.0)));
+        match expr {
+            Expr::Binary {
+                op: BinaryOp::Add, ..
+            } => {}
+            _ => panic!("Expected addition"),
         }
-        _ => panic!("expected multiplication expression"),
     }
-}
 
-#[test]
-fn test_single_number() {
-    let tokens = vec![Token::Number(42.0)];
+    #[test]
+    fn test_operator_precedence() {
+        // 1 + 2 * 3  => 1 + (2 * 3)
+        let expr = parse(vec![
+            Token::Number(1.0),
+            Token::Plus,
+            Token::Number(2.0),
+            Token::Star,
+            Token::Number(3.0),
+        ]);
 
-    let mut parser = Parser::new(tokens);
-    let ast = parser.parse().unwrap();
+        match expr {
+            Expr::Binary {
+                op: BinaryOp::Add,
+                left,
+                right,
+            } => match *right {
+                Expr::Binary {
+                    op: BinaryOp::Mul, ..
+                } => {}
+                _ => panic!("Expected multiplication on right side"),
+            },
+            _ => panic!("Expected addition at root"),
+        }
+    }
 
-    assert!(matches!(ast, Expr::Number(42.0)));
-}
+    #[test]
+    fn test_left_associativity() {
+        // (1 - 2) - 3
+        let expr = parse(vec![
+            Token::Number(1.0),
+            Token::Minus,
+            Token::Number(2.0),
+            Token::Minus,
+            Token::Number(3.0),
+        ]);
 
-#[test]
-fn test_parser_should_fail() {
-    let tokens = vec![Token::Number(42.0), Token::Plus];
+        match expr {
+            Expr::Binary {
+                op: BinaryOp::Sub,
+                left,
+                right,
+            } => match *left {
+                Expr::Binary {
+                    op: BinaryOp::Sub, ..
+                } => {}
+                _ => panic!("Expected left-associative subtraction"),
+            },
+            _ => panic!("Expected subtraction"),
+        }
+    }
 
-    let mut parser = Parser::new(tokens);
-    let result = parser.parse();
+    #[test]
+    fn test_parentheses_override_precedence() {
+        // (1 + 2) * 3
+        let expr = parse(vec![
+            Token::LParen,
+            Token::Number(1.0),
+            Token::Plus,
+            Token::Number(2.0),
+            Token::RParen,
+            Token::Star,
+            Token::Number(3.0),
+        ]);
 
-    assert!(result.is_err());
+        match expr {
+            Expr::Binary {
+                op: BinaryOp::Mul,
+                left,
+                ..
+            } => match *left {
+                Expr::Binary {
+                    op: BinaryOp::Add, ..
+                } => {}
+                _ => panic!("Expected addition inside parentheses"),
+            },
+            _ => panic!("Expected multiplication at root"),
+        }
+    }
+
+    #[test]
+    fn test_missing_rparen_error() {
+        let mut parser = Parser::new(vec![
+            Token::LParen,
+            Token::Number(1.0),
+            Token::Plus,
+            Token::Number(2.0),
+        ]);
+
+        let result = parser.parse_expr(0);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_unexpected_token_error() {
+        let mut parser = Parser::new(vec![Token::Plus]);
+
+        let result = parser.parse_expr(0);
+        assert!(result.is_err());
+    }
 }

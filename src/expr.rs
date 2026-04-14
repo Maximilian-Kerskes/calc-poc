@@ -1,11 +1,20 @@
 #[derive(Debug)]
 pub enum Expr {
     Number(f64),
+    Unary {
+        op: UnaryOp,
+        right: Box<Expr>,
+    },
     Binary {
         left: Box<Expr>,
         op: BinaryOp,
         right: Box<Expr>,
     },
+}
+
+#[derive(Debug)]
+pub enum UnaryOp {
+    Neg,
 }
 
 #[derive(Debug)]
@@ -25,6 +34,12 @@ impl Expr {
     pub fn eval(&self) -> Result<f64, EvalError> {
         match self {
             Expr::Number(n) => Ok(*n),
+            Expr::Unary { op, right } => {
+                let r = right.eval()?;
+                match op {
+                    UnaryOp::Neg => Ok(-r),
+                }
+            }
             Expr::Binary { left, op, right } => {
                 let l = left.eval()?;
                 let r = right.eval()?;
@@ -110,5 +125,49 @@ mod tests {
 
         let result = expr.eval();
         assert!(matches!(result, Err(EvalError::DivisionByZero)));
+    }
+
+    #[test]
+    fn test_unary_negation() {
+        // "-5"
+        let expr = Expr::Unary {
+            op: UnaryOp::Neg,
+            right: Box::new(Expr::Number(5.0)),
+        };
+
+        assert_eq!(expr.eval().unwrap(), -5.0);
+    }
+
+    #[test]
+    fn test_double_unary() {
+        // "--5"
+        let expr = Expr::Unary {
+            op: UnaryOp::Neg,
+            right: Box::new(Expr::Unary {
+                op: UnaryOp::Neg,
+                right: Box::new(Expr::Number(5.0)),
+            }),
+        };
+
+        assert_eq!(expr.eval().unwrap(), 5.0);
+    }
+
+    #[test]
+    fn test_unary_with_binary() {
+        // -(2 + 3) * 4 = -20
+        let expr = Expr::Binary {
+            left: Box::new(Expr::Unary {
+                op: UnaryOp::Neg,
+                right: Box::new(Expr::Binary {
+                    left: Box::new(Expr::Number(2.0)),
+                    op: BinaryOp::Add,
+                    right: Box::new(Expr::Number(3.0)),
+                }),
+            }),
+            op: BinaryOp::Mul,
+            right: Box::new(Expr::Number(4.0)),
+        };
+
+        assert_eq!(expr.eval().unwrap(), -20.0);
     }
 }

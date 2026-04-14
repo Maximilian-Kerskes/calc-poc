@@ -15,8 +15,8 @@ fn main() {
     let tokens: Vec<lexer::Token> = lexer.collect::<Result<Vec<_>, _>>().expect("failed to lex");
 
     let mut parser = parser::Parser::new(tokens);
-    let ast = parser.parse().unwrap();
+    let ast = parser.parse_expr(0).unwrap();
 
     let result = ast.eval().expect("failed to evaluate");
-    println!("{}", result);
+    println!("{result}");
 }
