@@ -94,14 +94,14 @@ impl Parser {
                 let expr = self.parse_expr(0)?;
                 match self.advance() {
                     Some(Token::RParen) => Ok(expr),
-                    found => Err(ParseError::UnexpectedToken {
+                    _found => Err(ParseError::UnexpectedToken {
                         expected: vec![")"],
                         found: None,
                     }),
                 }
             }
 
-            other => Err(ParseError::UnexpectedToken {
+            _other => Err(ParseError::UnexpectedToken {
                 expected: vec!["number", "(", "expression"],
                 found: None,
             }),
@@ -154,7 +154,7 @@ mod tests {
         match expr {
             Expr::Binary {
                 op: BinaryOp::Add,
-                left,
+                left: _,
                 right,
             } => match *right {
                 Expr::Binary {
@@ -181,7 +181,7 @@ mod tests {
             Expr::Binary {
                 op: BinaryOp::Sub,
                 left,
-                right,
+                right: _,
             } => match *left {
                 Expr::Binary {
                     op: BinaryOp::Sub, ..
